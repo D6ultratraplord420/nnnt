@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Google Images — "nude ass"</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 18px;
+    background: #111;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #eee;
+    padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 500; letter-spacing: .08em;
+       text-transform: uppercase; color: #888; margin: 0; text-align:center; }
+  #stage {
+    width: min(90vw, 560px);
+    height: min(70vh, 560px);
+    display: flex; align-items: center; justify-content: center;
+    background: #1a1a1a; border: 1px solid #2a2a2a;
+    border-radius: 14px; overflow: hidden; position: relative;
+  }
+  #img { max-width: 100%; max-height: 100%; display: none; object-fit: contain; }
+  #img.show { display: block; animation: pop .25s ease; }
+  @keyframes pop { from { opacity: 0; transform: scale(.96);} to {opacity:1; transform: scale(1);} }
+  button {
+    font: inherit; font-size: 16px; font-weight: 600;
+    padding: 13px 34px; border-radius: 999px; border: 0;
+    background: #fff; color: #111; cursor: pointer;
+    transition: transform .12s ease, opacity .12s;
+  }
+  button:hover { transform: translateY(-1px); }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { font-size: 12px; color: #666; min-height: 18px; text-align:center; }
+  #controls { display:flex; gap:12px; align-items:center; justify-content:center; flex-wrap:wrap; }
+  a.small { font-size:12px; color:#888; text-decoration:none; border-bottom:1px dotted rgba(255,255,255,0.06); padding-bottom:2px; }
+</style>
+</head>
+<body>
+  <h1>Google Images · "nude ass"</h1>
+  <div id="stage"><img id="img" alt=""></div>
+  <div id="controls">
+    <button id="btn" disabled>Loading…</button>
+    <a id="source" class="small" href="#" target="_blank" rel="noopener noreferrer"></a>
+  </div>
+  <div id="status">fetching results…</div>
+
+<script>
+/*
+  Behavior:
+  - Try multiple CORS proxy endpoints to fetch the Google Images HTML.
+  - Parse the returned HTML for image URLs (img[src|data-src], srcset, og:image).
+  - If images are found, allow cycling through them with the button.
+  - If not, use the FALLBACK array.
+*/
+
+const QUERY = 'nude ass';
+const GOOGLE_URL = 'https://www.google.com/search?q=' + encodeURIComponent(QUERY) + '&tbm=isch&hl=en';
+const PROXIES = [
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  u => 'https://corsproxy.io/?' + encodeURIComponent(u),
+  // add more proxies here if you trust them
+];
+
+// Hardcoded fallback images (replace with working URLs you control)
+const FALLBACK = [
+  'https://via.placeholder.com/800x600?text=fallback+1',
+  'https://via.placeholder.com/800x600?text=fallback+2',
+  'https://via.placeholder.com/800x600?text=fallback+3'
+];
+
+const imgEl = document.getElementById('img');
+const btn = document.getElementById('btn');
+const status = document.getElementById('status');
+const sourceLink = document.getElementById('source');
+
+let images = [];
+let index = 0;
+
+function updateStatus(text) {
+  status.textContent = text;
+}
+
+function isLikelyImageUrl(u) {
+  if (!u) return false;
+  u = u.trim();
+  if (u.startsWith('data:')) return true; // data URI (inline)
+  // ignore tiny placeholders / blank gifs
+  if (u.match(/(^about:|^blob:|base64,)/i)) return false;
+  // common image extensions or query-based images
+  return !!u.match(/\.(jpg|jpeg|png|gif|webp)(?:$|\?)/i) || u.includes('gstatic') || u.includes('googleusercontent') || u.includes('images');
+}
+
+function parseImageCandidatesFromDoc(doc) {
+  const found = new Set();
+
+  // meta og:image
+  const og = doc.querySelector('meta[property="og:image"], meta[name="og:image"]');
+  if (og && og.content) found.add(og.content);
+
+  // link rel=image_src
+  const linkImg = doc.querySelector('link[rel="image_src"]');
+  if (linkImg && linkImg.href) found.add(linkImg.href);
+
+  // all <img> tags
+  doc.querySelectorAll('img').forEach(im => {
+    const candidates = [];
+    if (im.src) candidates.push(im.src);
+    if (im.getAttribute('data-src')) candidates.push(im.getAttribute('data-src'));
+    if (im.getAttribute('data-iurl')) candidates.push(im.getAttribute('data-iurl'));
+    if (im.srcset) {
+      // take first entry of srcset
+      const first = im.srcset.split(',')[0].trim().split(' ')[0];
+      if (first) candidates.push(first);
+    }
+    candidates.forEach(c => {
+      if (isLikelyImageUrl(c)) found.add(c);
+    });
+  });
+
+  // search for JSON blobs with image URLs (some image providers embed JSON)
+  const scripts = Array.from(doc.querySelectorAll('script[type="application/json"], script:not([type])'));
+  for (const s of scripts) {
+    const t = (s.textContent || '').trim();
+    if (!t) continue;
+    // heuristic: look for "https://", ".jpg" and "http" in the script text and extract urls
+    const urlRegex = /https?:\/\/[^"'\\\s<>]{30,400}\.(?:jpg|jpeg|png|gif|webp)(?:\?[^"'\\\s<>]*)?/ig;
+    let m;
+    while ((m = urlRegex.exec(t)) !== null) {
+      if (isLikelyImageUrl(m[0])) found.add(m[0]);
+    }
+  }
+
+  return Array.from(found);
+}
+
+async function tryFetchThroughProxy(proxyFn, url) {
+  const proxied = proxyFn(url);
+  try {
+    const res = await fetch(proxied, { method: 'GET', credentials: 'omit' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    return text;
+  } catch (err) {
+    // propagate error to try next proxy
+    throw err;
+  }
+}
+
+async function fetchAndParseImages() {
+  updateStatus('trying to fetch image search page...');
+  for (let i = 0; i < PROXIES.length; i++) {
+    const proxyFn = PROXIES[i];
+    updateStatus(`trying proxy ${i+1} of ${PROXIES.length}...`);
+    try {
+      const html = await tryFetchThroughProxy(proxyFn, GOOGLE_URL);
+      updateStatus('parsing results from proxy ' + (i+1) + '...');
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const candidates = parseImageCandidatesFromDoc(doc);
+      if (candidates.length > 0) {
+        updateStatus(`found ${candidates.length} image candidates (proxy ${i+1}).`);
+        return { images: candidates, source: proxyFn(GOOGLE_URL) };
+      } else {
+        // no images found from this proxy, continue
+        updateStatus(`no image candidates found via proxy ${i+1}, trying next...`);
+      }
+    } catch (err) {
+      updateStatus(`proxy ${i+1} failed: ${err.message}`);
+      // wait a tiny bit to avoid hammering proxies
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+  // none of the proxies produced results
+  throw new Error('All proxies failed or returned no parsable results.');
+}
+
+function showImageAt(idx) {
+  if (!images || images.length === 0) return;
+  index = ((idx % images.length) + images.length) % images.length;
+  const url = images[index];
+  imgEl.classList.remove('show');
+  imgEl.onload = () => {
+    imgEl.classList.add('show');
+  };
+  imgEl.onerror = () => {
+    updateStatus('failed to load image, trying next...');
+    // remove this broken url and advance
+    images.splice(index, 1);
+    if (images.length === 0) {
+      fallbackToHardcoded();
+    } else {
+      showImageAt(index);
+    }
+  };
+  imgEl.src = url;
+  imgEl.alt = QUERY + ' result ' + (index + 1);
+  btn.disabled = false;
+  btn.textContent = 'Next →';
+  sourceLink.href = GOOGLE_URL;
+  sourceLink.textContent = 'open search';
+  updateStatus(`showing image ${index + 1} of ${images.length}`);
+}
+
+function fallbackToHardcoded() {
+  updateStatus('using fallback images');
+  images = FALLBACK.slice();
+  index = 0;
+  showImageAt(0);
+}
+
+btn.addEventListener('click', () => {
+  if (!images || images.length === 0) return;
+  showImageAt(index + 1);
+});
+
+// initial load
+(async function init() {
+  try {
+    const result = await fetchAndParseImages();
+    images = result.images;
+    // normalize some google image urls that are relative or data URIs
+    images = images.filter(Boolean).map(s => s.trim()).filter(isLikelyImageUrl);
+    if (images.length === 0) throw new Error('no usable images extracted');
+    showImageAt(0);
+    updateStatus('images ready — click Next to cycle.');
+  } catch (err) {
+    console.warn('fetch/parse failed:', err);
+    updateStatus('could not fetch remote results — falling back to local images.');
+    fallbackToHardcoded();
+  }
+})();
+</script>
+</body>
+</html>
